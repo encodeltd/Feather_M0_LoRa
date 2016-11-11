@@ -29,8 +29,11 @@
 //#define SENSOR_BMP085           // BMP085
 //#define SENSOR_BMP180           // BMP180
 //#define SENSOR_TSL2561          // TLS2561
-//#define SENSOR_BH1750          // BH1750FVI
+//#define SENSOR_BH1750           // BH1750FVI
 //#define SENSOR_DS18B20          // DS18B20
+//#define SENSOR_SR04             // HC-SR04
+//#define SENSOR_SRF05            // HC-SRF05
+//#define SENSOR_SRF06            // HC-SRF06
 
 // LoRaWAN Config
 // Device Address
@@ -49,11 +52,11 @@ unsigned char AppSkey[16] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x
 // Feather M0 RFM9x pin mappings
 lmic_pinmap pins = {
   .nss = 8,			    // Internal connected
-  .rxen = 0, 			// Not used for RFM92/RFM95
-  .txen = 0, 			// Not used for RFM92/RFM95
-  .rst = 4,  			// Internal connected
-  .dio = {3, 5, 6},		// Connect "i01" to "5"
-                        // Connect "D2" to "6"
+  .rxen = 0, 			  // Not used for RFM92/RFM95
+  .txen = 0, 			  // Not used for RFM92/RFM95
+  .rst = 4,  			  // Internal connected
+  .dio = {3, 5, 6},	// Connect "i01" to "5"
+                    // Connect "D2" to "6"
 };
 
 // Track if the current message has finished sending
@@ -113,6 +116,17 @@ BH1750 bh1750;
 #if defined(SENSOR_DS18B20)
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#endif
+
+/**
+ * HC-SR04, HC-SRF05, HC-SRF06 ultrasonic distance sensors
+ */
+#if defined(SENSOR_SR04) || defined(SENSOR_SRF05) || defined(SENSOR_SRF06)
+#include <NewPing.h>
+#define TRIGGER_PIN  12  // pin tied to trigger pin on the ultrasonic sensor.
+#define ECHO_PIN     11  // pin tied to echo pin on the ultrasonic sensor.
+#define MAX_DISTANCE 200 // Maximum distance we want to ping for (in centimeters). Maximum sensor distance is rated at 400-500cm.
+NewPing sonar(TRIGGER_PIN, ECHO_PIN, MAX_DISTANCE); // NewPing setup of pins and maximum distance.
 #endif
 
 /**
@@ -236,6 +250,12 @@ void loop() {
         delay(1000);
     #endif
 
+    // Send Distance in centimeters
+    #if defined(SENSOR_SR04) || defined(SENSOR_SRF05) || defined(SENSOR_SRF06)
+        sendDistance();
+        delay(1000);
+    #endif
+    
     // Shutdown the radio
     os_radio(RADIO_RST);
 
@@ -252,6 +272,45 @@ void loop() {
     sleep -= sinceWake;
     delay(constrain(sleep, 10000, 60000 * UpdateInterval));
 }
+
+/**
+ * Send a message with the distance
+ */
+#if defined(SENSOR_SR04) || defined(SENSOR_SRF05) || defined(SENSOR_SRF06)
+void sendDistance() {
+    // Ensure there is not a current TX/RX job running
+    if (LMIC.opmode & (1 << 7)) {
+        // Something already in the queque
+        return;
+    }
+
+    // Get the distance
+    char packet[40] = "";
+    strcat(packet, "Distance: ");
+    strcat(packet, sonar.ping_cm());
+
+
+    // Debug message
+    Serial.print("  seqno ");
+    Serial.print(LMIC.seqnoUp);
+    Serial.print(": ");
+    Serial.println(packet);
+
+    // Add to the queque
+    dataSent = false;
+    uint8_t lmic_packet[40];
+    strcpy((char *)lmic_packet, packet);
+    LMIC_setTxData2(1, lmic_packet, strlen((char *)lmic_packet), 0);
+
+    // Wait for the data to send or timeout after 15s
+    elapsedMillis sinceSend = 0;
+    while (!dataSent && sinceSend < 15000) {
+        os_runloop_once();
+        delay(1);
+    }
+    os_runloop_once();
+}
+#endif
 
 /**
  * Send a message with the light intensity
